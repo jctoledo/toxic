@@ -1,0 +1,5 @@
+Best for class name : toxic -> 0.916033 using {'C': 1000, 'max_iter': 500}
+Best for class name : severe_toxic -> 0.992424 using {'C': 100, 'max_iter': 100}
+Best for class name : obscene -> 0.995487 using {'C': 1000, 'max_iter': 2000}
+Best for class name : insult -> 0.975432 using {'C': 1000, 'max_iter': 100}
+Best for class name : identity_hate -> 0.967482 using {'C': 100, 'max_iter': 100}
