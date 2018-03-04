@@ -3,6 +3,10 @@ import logging
 import math
 import string
 
+from joblib import Parallel, delayed
+
+import multiprocessing
+
 import scipy
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
@@ -26,15 +30,15 @@ logger = logging.getLogger(__name__)
 SWEAR_WORDS = set()
 PUNCTUATIONS = ['#','!','@','$','*','~']
 CLASS_NAMES = ['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']
-
+NUM_CORES = multiprocessing.cpu_count()
 def compute_swear_word_proportion_df(adf, colname):
-    rm = pd.Series()
-    for index, row in adf.iterrows():
-        sp = compute_swear_word_proportion_str(row[colname])
-        rm.set_value(index, sp)
+
+    results = Parallel(n_jobs=NUM_CORES)(delayed(compute_swear_word_proportion_str)(row[colname],i) for i, row in adf.iterrows())
+    rm = pd.Series(dict(results))
+
     return rm
 
-def compute_swear_word_proportion_str(astr):
+def compute_swear_word_proportion_str(astr, indx=None):
     rm = 0.0
     if astr is None or len(astr) == 0:
         rm = 0.0
@@ -43,7 +47,10 @@ def compute_swear_word_proportion_str(astr):
         s = sum(remove_punctuation(w.lower()) in SWEAR_WORDS for w in words)
         prop = s / len(astr)
         rm = prop
-    return math.log10(rm + 1e-6)
+    rm = math.log10(rm +1e-6)
+    if indx is not None:
+        rm = (indx,rm)
+    return rm
 
 
 def compute_punctuation_proportion_str(astr):
@@ -61,7 +68,7 @@ def compute_punctuation_proportion_str(astr):
     return prop
 
 
-def compute_punctuation_proportion_str2(astr):
+def compute_punctuation_proportion_str2(astr, indx=None):
     punctz = set()
     if astr is None or len(astr) == 0:
         return 0.0
@@ -75,27 +82,45 @@ def compute_punctuation_proportion_str2(astr):
                 zum += 1
                 punctz.add(c)
     prop = zum / len(astr)
-    return prop
-
+    if indx is not None:
+        return (indx, prop)
+    else:
+        return prop
 
 def compute_punctuation_proportion_df(adf, colname):
-    rm = pd.Series()
-    for index,row in adf.iterrows():
-        pp = compute_punctuation_proportion_str2(row[colname])
-        rm.set_value(index, pp)
+    results = Parallel(n_jobs=NUM_CORES)(delayed(compute_punctuation_proportion_str2)(row[colname],i) for i, row in adf.iterrows())
+    rm = pd.Series(dict(results))
     return rm
 
+
+def compute_uppercase_proportion_str(astr, indx=None):
+    if astr is None or len(astr) == 0:
+        return 0.0
+    charz = set()
+    zum = 0
+    for c in astr:
+        if c in charz:
+            zum += 1
+        elif c.isupper():
+            zum += 1
+            charz.add(c)
+    prop = zum / len(astr)
+    if indx is not None:
+        return (indx, prop)
+    else:
+        return prop
+
+def compute_uppercase_proportion_df(adf, colname):
+    results = Parallel(n_jobs=NUM_CORES)(
+        delayed(compute_uppercase_proportion_str)(row[colname], i) for i, row in adf.iterrows())
+    rm = pd.Series(dict(results))
+
+    return rm
 
 def get_all_comments(train, test, colname):
     return pd.concat([train[colname], test[colname]])
 
-def read_swear_words(afp):
-    rm = set()
-    fin = open(afp, 'r')
-    for l in fin:
-        rm.add(l.strip().lower())
-    fin.close()
-    return rm
+
 
 def remove_punctuation(astr):
     for c in string.punctuation:
@@ -125,6 +150,13 @@ def create_char_vectorizer():
         max_features=50000)
     return cv
 
+def read_swear_words(afp):
+    rm = set()
+    fin = open(afp, 'r')
+    for l in fin:
+        rm.add(l.strip().lower())
+    fin.close()
+    return rm
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -157,6 +189,12 @@ if __name__ == "__main__":
     logging.info("Finished computing swearing proportions")
 
 
+    logging.info("Computing uppercase proportions ... ")
+
+    train['uppercase_proportion'] = compute_uppercase_proportion_df(train, 'comment_text')
+    test['uppercase_proportion'] = compute_uppercase_proportion_df(test, 'comment_text')
+    logging.info("Finished computing uppercase proportions")
+
     logging.info("Starting word vectorizer")
     # word vectorizer
     word_vectorizer = create_word_vectorizer()
@@ -177,6 +215,9 @@ if __name__ == "__main__":
     logging.info("finished char vectorizer...")
     #collect all features
     # collect all features
+    train_ucp = scipy.sparse.csr_matrix(train['uppercase_proportion']).transpose()
+    test_ucp = scipy.sparse.csr_matrix(test['uppercase_proportion']).transpose()
+
 
     train_pp = scipy.sparse.csr_matrix(train['punctuation_proportion']).transpose()
     test_pp = scipy.sparse.csr_matrix(test['punctuation_proportion']).transpose()
@@ -184,8 +225,8 @@ if __name__ == "__main__":
     train_sp = scipy.sparse.csr_matrix(train['swear_proportion']).transpose()
     test_sp = scipy.sparse.csr_matrix(test['swear_proportion']).transpose()
 
-    train_features = hstack([train_char_features, train_word_features, train_pp, train_sp])
-    test_features = hstack([test_char_features, test_word_features, test_pp, test_sp])
+    train_features = hstack([train_char_features, train_word_features, train_pp, train_sp, train_ucp])
+    test_features = hstack([test_char_features, test_word_features, test_pp, test_sp, test_ucp])
     logging.info("Preparing to train...")
 
     tuned_params = {
